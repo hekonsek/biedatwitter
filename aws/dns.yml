@@ -1,0 +1,5 @@
+Resources:
+  route53hostedzone:
+    Properties:
+      Name: biedatwitter.com
+    Type: AWS::Route53::HostedZone

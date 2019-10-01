@@ -1,0 +1,291 @@
+Resources:
+  CloudFormationCertificateResource:
+    Properties:
+      Code:
+        S3Bucket: capsilon-awsom
+        S3Key: awsom-cloudformation-certificate-0.3.0.zip
+      FunctionName: myproject-staging-cloudformation-certificate-resource
+      Handler: awsom-cloudformation-certificate
+      Role:
+        Fn::GetAtt:
+          - CloudFormationCertificateResourceRole
+          - Arn
+      Runtime: go1.x
+      Timeout: 900
+    Type: AWS::Lambda::Function
+  CloudFormationCertificateResourceRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCertificateManagerFullAccess
+        - arn:aws:iam::aws:policy/AmazonRoute53FullAccess
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: arn:aws:logs:*:*:*
+          PolicyName: logs
+    Type: AWS::IAM::Role
+  CloudWatchLogGroupbiedatwitter:
+    Properties:
+      LogGroupName: myproject-staging
+    Type: AWS::Logs::LogGroup
+  EcsExecutionRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Sid: ""
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+    Type: AWS::IAM::Role
+  acm:
+    Properties:
+      Domain: '*.staging.biedatwitter.com'
+      HostedZone: biedatwitter.com
+      ServiceToken:
+        Fn::GetAtt:
+          - CloudFormationCertificateResource
+          - Arn
+    Type: Custom::Certificate
+  ecscluster:
+    Properties:
+      ClusterName: myproject-staging
+    Type: AWS::ECS::Cluster
+  ecsservicebiedatwitter:
+    DependsOn: ecsservicebiedatwitterelbrule
+    Properties:
+      Cluster:
+        Ref: ecscluster
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 180
+      LaunchType: FARGATE
+      LoadBalancers:
+        - ContainerName: biedatwitter
+          ContainerPort: 8080
+          TargetGroupArn:
+            Ref: ecsservicebiedatwittertargetgroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - Ref: vpcsubnet1
+            - Ref: vpcsubnet2
+            - Ref: vpcsubnet3
+      ServiceName: biedatwitter
+      TaskDefinition:
+        Ref: ecstaskdefinitionbiedatwitter
+    Type: AWS::ECS::Service
+  ecsservicebiedatwitterelbrule:
+    Properties:
+      Actions:
+        - TargetGroupArn:
+            Ref: ecsservicebiedatwittertargetgroup
+          Type: forward
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values:
+              - biedatwitter.staging.biedatwitter.com
+      ListenerArn:
+        Ref: elbecslistener
+      Priority: 100
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+  ecsservicebiedatwittertargetgroup:
+    Properties:
+      HealthCheckPath: /health
+      Name: myproject-staging-biedatwitter
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId:
+        Ref: vpc
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+  ecstaskdefinitionbiedatwitter:
+    DependsOn: CloudWatchLogGroupbiedatwitter
+    Properties:
+      ContainerDefinitions:
+        - Environment: []
+          Image: docker.io/hekonsek/biedatwitter:latest
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: myproject-staging
+              awslogs-region: us-east-1
+              awslogs-stream-prefix: biedatwitter
+          Memory: "1024"
+          Name: biedatwitter
+          PortMappings:
+            - ContainerPort: 8080
+              HostPort: 8080
+      Cpu: "256"
+      ExecutionRoleArn:
+        Fn::GetAtt:
+          - EcsExecutionRole
+          - Arn
+      Family: biedatwitter
+      Memory: "1024"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+    Type: AWS::ECS::TaskDefinition
+  elbecs:
+    Properties:
+      Name: myproject-staging-ecs
+      Subnets:
+        - Ref: vpcsubnet1
+        - Ref: vpcsubnet2
+        - Ref: vpcsubnet3
+      Type: application
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+  elbecslistener:
+    Properties:
+      Certificates:
+        - CertificateArn:
+            Fn::GetAtt:
+              - acm
+              - CertificateArn
+      DefaultActions:
+        - FixedResponseConfig:
+            MessageBody: Default backend.
+            StatusCode: "200"
+          Type: fixed-response
+      LoadBalancerArn:
+        Ref: elbecs
+      Port: 443
+      Protocol: HTTPS
+    Type: AWS::ElasticLoadBalancingV2::Listener
+  elbecslistenerhttp:
+    Properties:
+      DefaultActions:
+        - RedirectConfig:
+            Port: 443
+            Protocol: HTTPS
+            StatusCode: HTTP_301
+          Type: redirect
+      LoadBalancerArn:
+        Ref: elbecs
+      Port: 80
+      Protocol: HTTP
+    Type: AWS::ElasticLoadBalancingV2::Listener
+  route53cnamebiedatwitter:
+    Properties:
+      HostedZoneName: biedatwitter.com.
+      Name: biedatwitter.staging.biedatwitter.com
+      ResourceRecords:
+        - Fn::GetAtt:
+            - elbecs
+            - DNSName
+      TTL: 360
+      Type: CNAME
+    Type: AWS::Route53::RecordSet
+  vpc:
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: myproject-staging
+    Type: AWS::EC2::VPC
+  vpcinternetgateway:
+    Type: AWS::EC2::InternetGateway
+  vpcinternetgatewayattachment:
+    Properties:
+      InternetGatewayId:
+        Ref: vpcinternetgateway
+      VpcId:
+        Ref: vpc
+    Type: AWS::EC2::VPCGatewayAttachment
+  vpcroute:
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: vpcinternetgateway
+      RouteTableId:
+        Ref: vpcroutetable
+    Type: AWS::EC2::Route
+  vpcroutetable:
+    Properties:
+      VpcId:
+        Ref: vpc
+    Type: AWS::EC2::RouteTable
+  vpcsecuritygrouphttp:
+    Properties:
+      CidrIp: 0.0.0.0/0
+      FromPort: 80
+      GroupId:
+        Fn::GetAtt:
+          - vpc
+          - DefaultSecurityGroup
+      IpProtocol: tcp
+      ToPort: 80
+    Type: AWS::EC2::SecurityGroupIngress
+  vpcsecuritygrouphttps:
+    Properties:
+      CidrIp: 0.0.0.0/0
+      FromPort: 443
+      GroupId:
+        Fn::GetAtt:
+          - vpc
+          - DefaultSecurityGroup
+      IpProtocol: tcp
+      ToPort: 443
+    Type: AWS::EC2::SecurityGroupIngress
+  vpcsubnet1:
+    Properties:
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.0.0/18
+      VpcId:
+        Ref: vpc
+    Type: AWS::EC2::Subnet
+  vpcsubnet1routetableassociation:
+    Properties:
+      RouteTableId:
+        Ref: vpcroutetable
+      SubnetId:
+        Ref: vpcsubnet1
+    Type: AWS::EC2::SubnetRouteTableAssociation
+  vpcsubnet2:
+    Properties:
+      AvailabilityZone: us-east-1b
+      CidrBlock: 10.0.64.0/18
+      VpcId:
+        Ref: vpc
+    Type: AWS::EC2::Subnet
+  vpcsubnet2routetableassociation:
+    Properties:
+      RouteTableId:
+        Ref: vpcroutetable
+      SubnetId:
+        Ref: vpcsubnet2
+    Type: AWS::EC2::SubnetRouteTableAssociation
+  vpcsubnet3:
+    Properties:
+      AvailabilityZone: us-east-1c
+      CidrBlock: 10.0.128.0/18
+      VpcId:
+        Ref: vpc
+    Type: AWS::EC2::Subnet
+  vpcsubnet3routetableassociation:
+    Properties:
+      RouteTableId:
+        Ref: vpcroutetable
+      SubnetId:
+        Ref: vpcsubnet3
+    Type: AWS::EC2::SubnetRouteTableAssociation
